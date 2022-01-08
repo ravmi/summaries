@@ -4,9 +4,9 @@ python run_summarization_flax.py \
         --output_dir ./t5_from_scratch \
         --model_type t5 \
         --tokenizer_name t5-small \
-        --train_file ~/subgoal_search_datasets/train.json \
-        --validation_file ~/subgoal_search_datasets/val.json \
-        --test_file ~/subgoal_search_datasets/test.json \
+        --train_file ~/subgoal_search_datasets/filtered_train.json \
+        --validation_file ~/subgoal_search_datasets/filtered_val.json \
+        --test_file ~/subgoal_search_datasets/filtered_test.json \
         --text_column source \
         --summary_column target \
         --do_train --do_eval --do_predict --predict_with_generate \
