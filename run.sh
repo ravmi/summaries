@@ -1,4 +1,5 @@
 #/bin/bash
+source venv/bin/activate;
 python run_summarization_flax.py \
         --output_dir ./t5_from_scratch \
         --model_type t5 \
