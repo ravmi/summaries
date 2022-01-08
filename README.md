@@ -12,6 +12,7 @@ $ . venv/bin/activate
 $ pip install -r requirements.txt
 $ ./run.sh
 ```
+To detach from the screen (disconnect the screen from the terminal and put it into the background): Ctrl + A then D on Linux.
 
 Logs will be updated here:
 https://app.neptune.ai/rm360179/subgoal-search/
