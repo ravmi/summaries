@@ -55,9 +55,11 @@ from transformers import (
     is_tensorboard_available,
 )
 from transformers.file_utils import get_full_repo_name, is_offline_mode
+import neptune.new as neptune
 
 
 logger = logging.getLogger(__name__)
+np.set_printoptions(threshold=np.inf)
 
 try:
     nltk.data.find("tokenizers/punkt")
@@ -107,7 +109,8 @@ class TrainingArguments:
     )
     adafactor: bool = field(default=False, metadata={"help": "Whether or not to replace AdamW by Adafactor."})
     num_train_epochs: float = field(default=3.0, metadata={"help": "Total number of training epochs to perform."})
-    warmup_steps: int = field(default=0, metadata={"help": "Linear warmup over warmup_steps."})
+    warmup_steps: int = field(default=0, metadata={"help": "Linear warmup over warmup_steps. Ignored if 'warmup_steps_percentage' is set"})
+    warmup_steps_percentage: float = field(default=None, metadata={"help": "What percentage of training steps are warmup steps."})
     logging_steps: int = field(default=500, metadata={"help": "Log every X updates steps."})
     save_steps: int = field(default=500, metadata={"help": "Save checkpoint every X updates steps."})
     eval_steps: int = field(default=None, metadata={"help": "Run an evaluation every X steps."})
@@ -259,7 +262,7 @@ class DataTrainingArguments:
         default=None, metadata={"help": "A prefix to add before every source text (useful for T5 models)."}
     )
     predict_with_generate: bool = field(
-        default=False, metadata={"help": "Whether to use generate to calculate generative metrics (ROUGE, BLEU)."}
+        default=False, metadata={"help": "Whether to use generate to calculate generative metrics (ROUGE, BLEU) and perfect_sequence score."}
     )
     num_beams: Optional[int] = field(
         default=None,
@@ -351,18 +354,33 @@ def create_learning_rate_fn(
     """Returns a linear warmup, linear_decay learning rate function."""
     steps_per_epoch = train_ds_size // train_batch_size
     num_train_steps = steps_per_epoch * num_train_epochs
-    warmup_fn = optax.linear_schedule(init_value=0.0, end_value=learning_rate, transition_steps=num_warmup_steps)
+    warmup_fn = optax.linear_schedule(init_value=learning_rate/(num_warmup_steps+1), end_value=learning_rate, transition_steps=num_warmup_steps)
     decay_fn = optax.linear_schedule(
-        init_value=learning_rate, end_value=0, transition_steps=num_train_steps - num_warmup_steps
+        init_value=learning_rate, end_value=learning_rate, transition_steps=num_train_steps - num_warmup_steps
     )
     schedule_fn = optax.join_schedules(schedules=[warmup_fn, decay_fn], boundaries=[num_warmup_steps])
     return schedule_fn
+
+
+def calculate_perfect_sequence_score(eval_preds, eval_labels):
+    perfect_sequence_count = 0
+    for ep, el in zip(eval_preds, eval_labels):
+        if (np.array_equal(ep[1:], el[:-1])):
+            perfect_sequence_count += 1
+
+    return perfect_sequence_count / len(eval_preds)
 
 
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
+
+    run = neptune.init(
+    project="rm360179/subgoal-search",
+    api_token="eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vYXBwLm5lcHR1bmUuYWkiLCJhcGlfdXJsIjoiaHR0cHM6Ly9hcHAubmVwdHVuZS5haSIsImFwaV9rZXkiOiI2MmVjN2EzYS04Y2FmLTRkYjItOTkyMi1mNmEwYWQzM2I3Y2UifQ==",
+    source_files=['run_summarization_flax.py', 'run.sh', 'README.md']
+)  # your credentials
 
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
@@ -371,6 +389,10 @@ def main():
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+
+    run['model_args'] = vars(model_args)
+    run['data_args'] = vars(data_args)
+    run['training_args'] = vars(training_args)
 
     if (
         os.path.exists(training_args.output_dir)
@@ -472,7 +494,9 @@ def main():
         )
 
     if model.config.decoder_start_token_id is None:
-        raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")
+        model.config.decoder_start_token_id = 0
+        #raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")
+    run['model_config'] = model.config
 
     prefix = data_args.source_prefix if data_args.source_prefix is not None else ""
 
@@ -647,12 +671,17 @@ def main():
     steps_per_epoch = len(train_dataset) // train_batch_size
     total_train_steps = steps_per_epoch * num_epochs
 
+    if training_args.warmup_steps_percentage is None:
+        warmup_steps_int = training_args.warmup_steps
+    else:
+        assert 0.0 <= training_args.warmup_steps_percentage <= 1.0, "warmup_steps_percentage must be >= 0.0 <= 1.0!"
+        warmup_steps_int = int(training_args.warmup_steps_percentage * training_args.num_train_epochs)
     # Create learning rate schedule
     linear_decay_lr_schedule_fn = create_learning_rate_fn(
         len(train_dataset),
         train_batch_size,
         training_args.num_train_epochs,
-        training_args.warmup_steps,
+        warmup_steps_int,
         training_args.learning_rate,
     )
 
@@ -815,6 +844,7 @@ def main():
                 eval_preds.extend(jax.device_get(generated_ids.reshape(-1, gen_kwargs["max_length"])))
                 eval_labels.extend(jax.device_get(labels.reshape(-1, labels.shape[-1])))
 
+
         # normalize eval metrics
         eval_metrics = get_metrics(eval_metrics)
         eval_metrics = jax.tree_map(jnp.mean, eval_metrics)
@@ -830,6 +860,13 @@ def main():
         desc = f"Epoch... ({epoch + 1}/{num_epochs} | Eval Loss: {eval_metrics['loss']} | {rouge_desc})"
         epochs.write(desc)
         epochs.desc = desc
+
+        run['learning_rate'].log(train_metric['learning_rate'])
+        run['train_loss'].log(train_metric['loss'])
+        run['eval_loss'].log(eval_metrics['loss'])
+        if data_args.predict_with_generate:
+            perfect_sequence_score = calculate_perfect_sequence_score(eval_preds, eval_labels)
+            run['perfect_sequence_score_validation'].log(perfect_sequence_score)
 
         # Save metrics
         if has_tensorboard and jax.process_index() == 0:
@@ -882,6 +919,11 @@ def main():
         # Print metrics
         desc = f"Predict Loss: {pred_metrics['loss']} | {rouge_desc})"
         logger.info(desc)
+
+        run['test_loss'] = pred_metrics['loss']
+        if data_args.predict_with_generate:
+            perfect_sequence_score = calculate_perfect_sequence_score(eval_preds, eval_labels)
+            run['perfect_sequence_score_test'] = perfect_sequence_score
 
         # save final metrics in json
         if jax.process_index() == 0:
