@@ -354,7 +354,7 @@ def create_learning_rate_fn(
     """Returns a linear warmup, linear_decay learning rate function."""
     steps_per_epoch = train_ds_size // train_batch_size
     num_train_steps = steps_per_epoch * num_train_epochs
-    warmup_fn = optax.linear_schedule(init_value=learning_rate/(num_warmup_steps+1), end_value=learning_rate, transition_steps=num_warmup_steps)
+    warmup_fn = optax.linear_schedule(init_value=0., end_value=learning_rate, transition_steps=num_warmup_steps)
     decay_fn = optax.linear_schedule(
         init_value=learning_rate, end_value=learning_rate, transition_steps=num_train_steps - num_warmup_steps
     )
@@ -675,7 +675,7 @@ def main():
         warmup_steps_int = training_args.warmup_steps
     else:
         assert 0.0 <= training_args.warmup_steps_percentage <= 1.0, "warmup_steps_percentage must be >= 0.0 <= 1.0!"
-        warmup_steps_int = int(training_args.warmup_steps_percentage * training_args.num_train_epochs)
+        warmup_steps_int = int(training_args.warmup_steps_percentage * total_train_steps)
     # Create learning rate schedule
     linear_decay_lr_schedule_fn = create_learning_rate_fn(
         len(train_dataset),
