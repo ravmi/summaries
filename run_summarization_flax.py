@@ -688,7 +688,7 @@ def main():
     cosine_decay_lr_schedule_fn = optax.warmup_cosine_decay_schedule(
             init_value=0.,
             peak_value=training_args.learning_rate,
-            warmup_steps=training_args.warmup_steps_int,
+            warmup_steps=warmup_steps_int,
             decay_steps=steps_per_epoch * num_epochs, # total steps actually, the name may be confusing
             end_value=0.)
 
