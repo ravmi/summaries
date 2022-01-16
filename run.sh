@@ -10,8 +10,8 @@ python run_summarization_flax.py \
         --text_column source \
         --summary_column target \
         --do_train --do_eval --do_predict --predict_with_generate \
-        --num_train_epochs 30 \
-        --learning_rate 5e-4 --warmup_steps_percentage 0.1 \
+        --num_train_epochs 14 \
+        --learning_rate 5e-4 --warmup_steps 10000 \
         --per_device_train_batch_size 32 \
         --per_device_eval_batch_size 32 \
         --overwrite_output_dir \

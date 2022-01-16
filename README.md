@@ -40,7 +40,8 @@ If you want to describe your experiment without git commits, modify run.sh and e
 
 -------
 
-your description here
+10k steps warmup, ~100k steps total (little more actually)
+cosine decay
 
 -------
 
