@@ -685,6 +685,13 @@ def main():
         training_args.learning_rate,
     )
 
+    cosine_decay_lr_schedule_fn = optax.warmup_cosine_decay_schedule(
+            init_value=0.,
+            peak_value=training_args.learning_rate,
+            warmup_steps=training_args.warmup_steps_int,
+            decay_steps=steps_per_epoch * num_epochs, # total steps actually, the name may be confusing
+            end_value=0.)
+
     # We use Optax's "masking" functionality to not apply weight decay
     # to bias and LayerNorm scale parameters. decay_mask_fn returns a
     # mask boolean with the same structure as the parameters.
@@ -702,7 +709,7 @@ def main():
 
     # create adam optimizer
     adamw = optax.adamw(
-        learning_rate=linear_decay_lr_schedule_fn,
+        learning_rate=cosine_decay_lr_schedule_fn,
         b1=training_args.adam_beta1,
         b2=training_args.adam_beta2,
         eps=training_args.adam_epsilon,
@@ -751,7 +758,7 @@ def main():
 
         new_state = state.apply_gradients(grads=grad, dropout_rng=new_dropout_rng)
 
-        metrics = {"loss": loss, "learning_rate": linear_decay_lr_schedule_fn(state.step)}
+        metrics = {"loss": loss, "learning_rate": cosine_decay_lr_schedule_fn(state.step)}
         metrics = jax.lax.pmean(metrics, axis_name="batch")
 
         return new_state, metrics
@@ -813,6 +820,9 @@ def main():
         for _ in tqdm(range(steps_per_epoch), desc="Training...", position=1, leave=False):
             batch = next(train_loader)
             state, train_metric = p_train_step(state, batch)
+            utm = unreplicate(train_metric)
+            run['train_loss_per_step'].log(utm['loss'])
+            run['learning_rate_per_step'].log(utm['learning_rate'])
             train_metrics.append(train_metric)
 
         train_time += time.time() - train_start
